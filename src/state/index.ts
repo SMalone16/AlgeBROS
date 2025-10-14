@@ -1,6 +1,17 @@
-export { usePlayerStore, selectActivePlayer } from './playerStore'
-export { useShipStore, selectShipsByOwner } from './shipStore'
-export { useTurnTimerStore, selectIsTimerExpired } from './timerStore'
+export {
+  usePlayerStore,
+  selectActivePlayer,
+  selectPlayers,
+  selectActivePlayerId,
+} from './playerStore'
+export { useShipStore, selectShipsByOwner, selectAllShips } from './shipStore'
+export {
+  useTurnTimerStore,
+  selectIsTimerExpired,
+  selectTimerSnapshot,
+  selectSecondsRemaining,
+  selectIsTimerPaused,
+} from './timerStore'
 
 /**
  * TODO: Introduce combined selectors for territory summaries and scoreboard

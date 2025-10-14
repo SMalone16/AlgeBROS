@@ -25,3 +25,8 @@ export const selectActivePlayer = (state: PlayerStore): PlayerProfile | null => 
   /** TODO: Cross-reference alliance buffs and ship status for the HUD. */
   return state.players.find((player) => player.id === state.activePlayerId) ?? null
 }
+
+export const selectPlayers = (state: PlayerStore): PlayerProfile[] => state.players
+
+export const selectActivePlayerId = (state: PlayerStore): string | null =>
+  state.activePlayerId
