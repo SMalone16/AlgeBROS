@@ -3,6 +3,8 @@ import {
   BOARD_COLUMNS,
   BOARD_ROWS,
   initializeBoard,
+  THRUST_COEFFICIENT,
+  type MovementResult,
   type BoardState,
   type BoardStateCell,
 } from '../game'
@@ -15,6 +17,9 @@ import {
   useShipStore,
   useTurnTimerStore,
   selectAllShips,
+  selectPreviewResult,
+  selectPreviewEnabled,
+  useMovementPreviewStore,
 } from '../state'
 import { shallow } from 'zustand/shallow'
 
@@ -52,6 +57,7 @@ const drawBoard = (
   board: BoardState,
   shipPositions: ReturnType<typeof selectAllShips>,
   ownerColors: Map<string, string>,
+  preview: { result: MovementResult | null; enabled: boolean },
 ) => {
   const { width, height } = context.canvas
   if (board.length === 0 || board[0].length === 0) {
@@ -99,6 +105,55 @@ const drawBoard = (
     context.fill()
     context.stroke()
   })
+
+  if (preview.enabled && preview.result && preview.result.success) {
+    const { origin, destination, delta, ownerId } = preview.result
+    const startX = (origin.x + 0.5) * cellWidth
+    const startY = (origin.y + 0.5) * cellHeight
+    const endX = (destination.x + 0.5) * cellWidth
+    const endY = (destination.y + 0.5) * cellHeight
+    const ownerColor = ownerColors.get(ownerId) ?? '#38bdf8'
+    const totalSegments = Math.abs(delta.x) * THRUST_COEFFICIENT
+
+    context.save()
+    context.lineWidth = Math.max(2, Math.min(cellWidth, cellHeight) * 0.15)
+    context.strokeStyle = ownerColor
+    context.globalAlpha = 0.5
+    context.setLineDash([8, 6])
+    context.beginPath()
+    context.moveTo(startX, startY)
+
+    if (totalSegments === 0) {
+      context.lineTo(endX, endY)
+    } else {
+      for (let segment = 1; segment <= totalSegments; segment += 1) {
+        const progress = segment / totalSegments
+        const intermediateX =
+          (origin.x + 0.5 + delta.x * progress) * cellWidth
+        const intermediateY = (origin.y + 0.5 + delta.y * progress) * cellHeight
+        context.lineTo(intermediateX, intermediateY)
+      }
+    }
+
+    context.stroke()
+    context.setLineDash([])
+
+    const markerRadius = Math.min(cellWidth, cellHeight) * 0.28
+
+    context.globalAlpha = 0.35
+    context.fillStyle = ownerColor
+    context.beginPath()
+    context.arc(endX, endY, markerRadius, 0, Math.PI * 2)
+    context.fill()
+
+    context.globalAlpha = 0.85
+    context.lineWidth = Math.max(2, Math.min(cellWidth, cellHeight) * 0.1)
+    context.strokeStyle = ownerColor
+    context.beginPath()
+    context.arc(endX, endY, markerRadius, 0, Math.PI * 2)
+    context.stroke()
+    context.restore()
+  }
 }
 
 export const GameBoard = () => {
@@ -109,6 +164,9 @@ export const GameBoard = () => {
   const ships = useShipStore(selectAllShips, shallow)
   const secondsRemaining = useTurnTimerStore(selectSecondsRemaining)
   const isPaused = useTurnTimerStore(selectIsTimerPaused)
+  const previewResult = useMovementPreviewStore(selectPreviewResult, shallow)
+  const isPreviewEnabled = useMovementPreviewStore(selectPreviewEnabled)
+  const setPreviewEnabled = useMovementPreviewStore((state) => state.setEnabled)
 
   const ownerColors = useMemo(() => {
     const mapping = new Map<string, string>()
@@ -125,8 +183,11 @@ export const GameBoard = () => {
       return
     }
 
-    drawBoard(context, board, ships, ownerColors)
-  }, [board, ships, ownerColors])
+    drawBoard(context, board, ships, ownerColors, {
+      result: previewResult,
+      enabled: isPreviewEnabled,
+    })
+  }, [board, ships, ownerColors, previewResult, isPreviewEnabled])
 
   const timerLabel = formatTimerLabel(secondsRemaining, isPaused)
   const activeCommander = activePlayer?.codename ?? 'Awaiting commander'
@@ -149,18 +210,44 @@ export const GameBoard = () => {
             inset: '0.75rem',
             display: 'flex',
             flexDirection: 'column',
-            gap: '0.25rem',
+            gap: '0.5rem',
             padding: '0.75rem',
             background: 'linear-gradient(135deg, rgba(15,23,42,0.85), rgba(15,23,42,0.45))',
             color: '#f8fafc',
             borderRadius: '0.75rem',
-            pointerEvents: 'none',
-            maxWidth: 'min(320px, 100%)',
+            pointerEvents: 'auto',
+            maxWidth: 'min(340px, 100%)',
           }}
         >
           <p data-testid="timer-display">{timerLabel}</p>
           <p data-testid="commander-display">Active Commander: {activeCommander}</p>
           <p data-testid="fleet-display">Fleet deployed: {ships.length} ships</p>
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              fontSize: '0.875rem',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={isPreviewEnabled}
+              onChange={(event) => setPreviewEnabled(event.target.checked)}
+            />
+            <span>Show trajectory preview</span>
+          </label>
+          {isPreviewEnabled && previewResult && !previewResult.success ? (
+            <p
+              style={{
+                fontSize: '0.75rem',
+                color: '#fca5a5',
+                margin: 0,
+              }}
+            >
+              Preview unavailable: {previewResult.message}
+            </p>
+          ) : null}
         </div>
       </div>
     </section>
