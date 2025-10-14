@@ -15,6 +15,8 @@ export type TerrainType =
 
 export type EquationDifficulty = 'easy' | 'medium' | 'hard'
 
+export const THRUST_COEFFICIENT = 8
+
 export interface BoardStateCell {
   id: string
   row: number
@@ -348,10 +350,7 @@ const sanitizeExpression = (expression: string): string => expression.replace(/\
 
 const containsInvalidTokens = (expression: string): boolean => /[^0-9+\-*/^()]/.test(expression)
 
-export const movementResolver = (
-  submission: MovementSubmission,
-  dependencies: MovementResolverDependencies = {},
-): MovementResult => {
+export const resolveMovementSubmission = (submission: MovementSubmission): MovementResult => {
   const { difficulty, expression } = submission
   const rules = DIFFICULTY_RULES[difficulty]
 
@@ -470,12 +469,7 @@ export const movementResolver = (
     }
   }
 
-  const updateShipPosition =
-    dependencies.updateShipPosition ?? useShipStore.getState().updateShipPosition
-
   const destination = { x: destinationX, y: destinationY }
-  updateShipPosition(submission.shipId, destination)
-
   return {
     success: true,
     shipId: submission.shipId,
@@ -485,6 +479,27 @@ export const movementResolver = (
     destination,
     delta: { x: evaluated, y: 0 },
     evaluated,
+    message: 'Trajectory resolved.',
+  }
+}
+
+export const movementResolver = (
+  submission: MovementSubmission,
+  dependencies: MovementResolverDependencies = {},
+): MovementResult => {
+  const result = resolveMovementSubmission(submission)
+
+  if (!result.success) {
+    return result
+  }
+
+  const updateShipPosition =
+    dependencies.updateShipPosition ?? useShipStore.getState().updateShipPosition
+
+  updateShipPosition(submission.shipId, result.destination)
+
+  return {
+    ...result,
     message: 'Trajectory resolved and ship position updated.',
   }
 }
