@@ -1,10 +1,10 @@
 import { create } from 'zustand'
-import type { PlayerProfile } from '../types'
+import type { CanonicalPolygon, PlayerProfile } from '../types'
 
 export interface ContestedRegionSnapshot {
   owners: string[]
-  cells: Array<{ row: number; column: number }>
-  cellCount: number
+  polygons: CanonicalPolygon[]
+  overlapEstimate: number
 }
 
 export interface LeaderboardSnapshot {

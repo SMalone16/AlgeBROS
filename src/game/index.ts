@@ -4,6 +4,8 @@ import type { ShipStore } from '../state/shipStore'
 import { useTurnTimerStore } from '../state/timerStore'
 import type { TurnTimerStore } from '../state/timerStore'
 import { usePlayerStore, type LeaderboardSnapshot } from '../state/playerStore'
+import { detectClosedPolygons, estimateBoundingBoxOverlapArea, polygonsOverlap } from './closureDetection'
+import type { CanonicalPolygon, ShipModel } from '../types'
 import { useDockMenuStore } from '../state/dockMenuStore'
 import type { DockingContact, DockingGeometry } from '../types'
 
@@ -439,13 +441,6 @@ export interface TerritoryManagerResult {
   resolvedAt: number
 }
 
-const neighborOffsets = [
-  { row: -1, column: 0 },
-  { row: 1, column: 0 },
-  { row: 0, column: -1 },
-  { row: 0, column: 1 },
-]
-
 export const territoryManager = (
   options: TerritoryManagerOptions = {},
 ): TerritoryManagerResult => {
@@ -458,122 +453,124 @@ export const territoryManager = (
       cell.occupantId = null
     })
   })
+  const ownerPolygonMaps = new Map<string, Map<string, CanonicalPolygon>>()
+  const pendingShipUpdates = new Map<string, CanonicalPolygon[]>()
 
-  const occupiedCells = new Map<
-    string,
-    {
-      owners: Set<string>
-      shipIds: string[]
-      cell: BoardStateCell
-    }
-  >()
+  const mergePolygons = (
+    existing: CanonicalPolygon[],
+    detected: CanonicalPolygon[],
+  ): CanonicalPolygon[] => {
+    const map = new Map<string, CanonicalPolygon>()
+    existing.forEach((polygon) => {
+      map.set(polygon.id, polygon)
+    })
+    detected.forEach((polygon) => {
+      const current = map.get(polygon.id)
+      if (!current || polygon.finalizedAt > current.finalizedAt) {
+        map.set(polygon.id, polygon)
+      }
+    })
+    return Array.from(map.values()).sort((a, b) => a.finalizedAt - b.finalizedAt)
+  }
 
   shipList.forEach((ship) => {
-    const row = ship.position.y
-    const column = ship.position.x
-    const boardRow = board[row]
-    if (!boardRow) {
-      return
+    const detected = ship.trailHistory.flatMap((trail) => detectClosedPolygons(trail))
+    const merged = mergePolygons(ship.territoryPolygons ?? [], detected)
+
+    if (merged.length !== ship.territoryPolygons.length) {
+      pendingShipUpdates.set(ship.id, merged)
     }
-    const cell = boardRow[column]
-    if (!cell || cell.isObstacle) {
+
+    if (!merged.length) {
       return
     }
 
-    const key = `${row}-${column}`
-    let entry = occupiedCells.get(key)
-    if (!entry) {
-      entry = { owners: new Set(), shipIds: [], cell }
-      occupiedCells.set(key, entry)
+    let ownerEntry = ownerPolygonMaps.get(ship.ownerId)
+    if (!ownerEntry) {
+      ownerEntry = new Map<string, CanonicalPolygon>()
+      ownerPolygonMaps.set(ship.ownerId, ownerEntry)
     }
-    entry.owners.add(ship.ownerId)
-    entry.shipIds.push(ship.id)
+
+    merged.forEach((polygon) => {
+      const existing = ownerEntry?.get(polygon.id)
+      if (!existing || polygon.finalizedAt > existing.finalizedAt) {
+        ownerEntry?.set(polygon.id, polygon)
+      }
+    })
   })
 
-  const visited = new Set<string>()
-  const contestedCells = new Set<string>()
-  const contestedRegions: ContestedRegionSummary[] = []
-  const scoreMap = new Map<string, number>()
-
-  const getNeighbors = (cell: BoardStateCell): string[] =>
-    neighborOffsets
-      .map(({ row: deltaRow, column: deltaColumn }) => ({
-        row: cell.row + deltaRow,
-        column: cell.column + deltaColumn,
-      }))
-      .filter(({ row, column }) => occupiedCells.has(`${row}-${column}`))
-      .map(({ row, column }) => `${row}-${column}`)
-
-  occupiedCells.forEach((entry, key) => {
-    if (visited.has(key)) {
-      return
-    }
-
-    const componentCells: BoardStateCell[] = []
-    const owners = new Set<string>()
-    let contested = entry.owners.size > 1
-    const queue: string[] = [key]
-    let queueIndex = 0
-    visited.add(key)
-
-    while (queueIndex < queue.length) {
-      const currentKey = queue[queueIndex]
-      queueIndex += 1
-      const currentEntry = occupiedCells.get(currentKey)
-      if (!currentEntry) {
-        continue
-      }
-
-      componentCells.push(currentEntry.cell)
-      currentEntry.owners.forEach((owner) => owners.add(owner))
-      if (currentEntry.owners.size > 1) {
-        contested = true
-      }
-
-      getNeighbors(currentEntry.cell).forEach((neighborKey) => {
-        if (visited.has(neighborKey)) {
-          return
+  if (pendingShipUpdates.size > 0) {
+    useShipStore.setState((state) => {
+      const nextShips = { ...state.ships }
+      const nextShipList = state.shipList.map((ship) => {
+        const updatedPolygons = pendingShipUpdates.get(ship.id)
+        if (!updatedPolygons) {
+          return ship
         }
-        visited.add(neighborKey)
-        queue.push(neighborKey)
+        const updatedShip: ShipModel = {
+          ...ship,
+          territoryPolygons: updatedPolygons,
+        }
+        nextShips[ship.id] = updatedShip
+        return updatedShip
       })
-    }
 
-    if (owners.size > 1) {
-      contested = true
-    }
-
-    if (contested) {
-      componentCells.forEach((cell) => {
-        contestedCells.add(`${cell.row}-${cell.column}`)
+      pendingShipUpdates.forEach((polygons, shipId) => {
+        if (!nextShips[shipId]) {
+          const original = state.ships[shipId]
+          if (original) {
+            nextShips[shipId] = { ...original, territoryPolygons: polygons }
+          }
+        }
       })
-      contestedRegions.push({
-        owners: Array.from(owners).sort(),
-        cells: componentCells.map((cell) => ({ row: cell.row, column: cell.column })),
-        cellCount: componentCells.length,
-      })
-      return
-    }
 
-    const ownerId = owners.values().next().value as string | undefined
-    if (!ownerId) {
-      return
-    }
-    scoreMap.set(ownerId, (scoreMap.get(ownerId) ?? 0) + componentCells.length)
+      return {
+        ...state,
+        ships: nextShips,
+        shipList: nextShipList,
+      }
+    })
+  }
+
+  const scoreMap = new Map<string, number>()
+  ownerPolygonMaps.forEach((polygons, ownerId) => {
+    const totalArea = Array.from(polygons.values()).reduce(
+      (accumulator, polygon) => accumulator + polygon.area,
+      0,
+    )
+    scoreMap.set(ownerId, totalArea)
   })
 
-  occupiedCells.forEach((entry, key) => {
-    if (contestedCells.has(key)) {
-      entry.cell.occupantId = null
-      return
-    }
+  const contestedRegions: ContestedRegionSummary[] = []
+  const contestedKeys = new Set<string>()
+  const ownerEntries = Array.from(ownerPolygonMaps.entries())
 
-    if (entry.owners.size === 1) {
-      entry.cell.occupantId = entry.shipIds[0] ?? null
-    } else {
-      entry.cell.occupantId = null
+  for (let i = 0; i < ownerEntries.length; i += 1) {
+    const [ownerA, polygonsA] = ownerEntries[i]
+    const polygonsAList = Array.from(polygonsA.values())
+    for (let j = i + 1; j < ownerEntries.length; j += 1) {
+      const [ownerB, polygonsB] = ownerEntries[j]
+      const polygonsBList = Array.from(polygonsB.values())
+
+      polygonsAList.forEach((polygonA) => {
+        polygonsBList.forEach((polygonB) => {
+          if (!polygonsOverlap(polygonA, polygonB)) {
+            return
+          }
+          const key = [ownerA, ownerB, polygonA.id, polygonB.id].join('|')
+          if (contestedKeys.has(key)) {
+            return
+          }
+          contestedKeys.add(key)
+          contestedRegions.push({
+            owners: [ownerA, ownerB].sort(),
+            polygons: [polygonA, polygonB],
+            overlapEstimate: estimateBoundingBoxOverlapArea(polygonA, polygonB),
+          })
+        })
+      })
     }
-  })
+  }
 
   const scores: Record<string, number> = {}
   players.forEach((player) => {

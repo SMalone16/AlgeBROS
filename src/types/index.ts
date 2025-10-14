@@ -15,13 +15,42 @@ export interface ShipMotionState {
   totalDistance: number
 }
 
+export interface Vector2 {
+  x: number
+  y: number
+}
+
+export interface ShipTrailSegment {
+  start: Vector2
+  end: Vector2
+  completedAt: number
+}
+
+export interface ShipTurnTrail {
+  turnId: number
+  startedAt: number
+  updatedAt: number
+  segments: ShipTrailSegment[]
+}
+
+export interface CanonicalPolygon {
+  id: string
+  vertices: Vector2[]
+  area: number
+  perimeter: number
+  turnId: number
+  finalizedAt: number
+}
+
 export interface ShipModel {
   id: string
   ownerId: string
-  position: { x: number; y: number }
-  localFrameOrigin: { x: number; y: number }
+  position: Vector2
+  localFrameOrigin: Vector2
   accumulatedDistance: number
   motionState: ShipMotionState
+  trailHistory: ShipTurnTrail[]
+  territoryPolygons: CanonicalPolygon[]
   /** TODO: Extend with velocity, health, cargo, and algebraic cooldown stats. */
 }
 

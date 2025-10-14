@@ -1,5 +1,6 @@
 import { create } from 'zustand'
-import type { ShipModel, ShipMotionState } from '../types'
+import type { ShipModel, ShipMotionState, ShipTrailSegment, ShipTurnTrail } from '../types'
+import { useTurnTimerStore } from './timerStore'
 
 export interface ShipStore {
   ships: Record<string, ShipModel>
@@ -18,6 +19,8 @@ export interface ShipPositionUpdateOptions {
   distanceDelta?: number
   resetFrame?: boolean
   motionState?: Partial<ShipMotionState>
+  timestamp?: number
+  turnId?: number
 }
 
 const createDefaultMotionState = (): ShipMotionState => ({
@@ -30,6 +33,24 @@ const createDefaultMotionState = (): ShipMotionState => ({
   totalDistance: 0,
 })
 
+const cloneTrailHistory = (history: ShipTurnTrail[] = []): ShipTurnTrail[] =>
+  history.map((trail) => ({
+    turnId: trail.turnId,
+    startedAt: trail.startedAt,
+    updatedAt: trail.updatedAt,
+    segments: trail.segments.map((segment) => ({
+      start: { ...segment.start },
+      end: { ...segment.end },
+      completedAt: segment.completedAt,
+    })),
+  }))
+
+const clonePolygons = (polygons: ShipModel['territoryPolygons'] = []) =>
+  polygons.map((polygon) => ({
+    ...polygon,
+    vertices: polygon.vertices.map((vertex) => ({ ...vertex })),
+  }))
+
 const ensureShipModel = (
   ship: ShipModel | undefined,
   fallback: { id: string; ownerId: string; position: { x: number; y: number } },
@@ -40,6 +61,8 @@ const ensureShipModel = (
   localFrameOrigin: ship?.localFrameOrigin ?? fallback.position,
   accumulatedDistance: ship?.accumulatedDistance ?? 0,
   motionState: ship?.motionState ?? createDefaultMotionState(),
+  trailHistory: cloneTrailHistory(ship?.trailHistory ?? []),
+  territoryPolygons: clonePolygons(ship?.territoryPolygons ?? []),
 })
 
 const hydrateShip = (ship: ShipModel): ShipModel => ({
@@ -47,6 +70,8 @@ const hydrateShip = (ship: ShipModel): ShipModel => ({
   localFrameOrigin: ship.localFrameOrigin ?? { ...ship.position },
   accumulatedDistance: ship.accumulatedDistance ?? 0,
   motionState: ship.motionState ?? createDefaultMotionState(),
+  trailHistory: cloneTrailHistory(ship.trailHistory ?? []),
+  territoryPolygons: clonePolygons(ship.territoryPolygons ?? []),
 })
 
 const normalizeShips = (ships: ShipModel[]): Record<string, ShipModel> =>
@@ -73,6 +98,8 @@ export const useShipStore = create<ShipStore>((set) => ({
 
       let nextFrameOrigin = options?.frameOrigin ?? base.localFrameOrigin
       let nextAccumulatedDistance = base.accumulatedDistance
+      const timestamp = options?.timestamp ?? Date.now()
+      const activeTurnId = options?.turnId ?? useTurnTimerStore.getState().turnId
 
       if (typeof options?.distanceDelta === 'number') {
         nextAccumulatedDistance += Math.abs(options.distanceDelta)
@@ -82,6 +109,65 @@ export const useShipStore = create<ShipStore>((set) => ({
         nextFrameOrigin = position
         nextAccumulatedDistance = 0
       }
+
+      let nextTrailHistory = base.trailHistory ?? []
+      let currentTrail: ShipTurnTrail | undefined =
+        nextTrailHistory[nextTrailHistory.length - 1]
+
+      const shouldResetTrail =
+        options?.resetFrame || !currentTrail || currentTrail.turnId !== activeTurnId
+
+      if (shouldResetTrail) {
+        currentTrail = {
+          turnId: activeTurnId,
+          startedAt: timestamp,
+          updatedAt: timestamp,
+          segments: [],
+        }
+        if (
+          nextTrailHistory[nextTrailHistory.length - 1]?.turnId === activeTurnId
+        ) {
+          nextTrailHistory = [
+            ...nextTrailHistory.slice(0, -1),
+            currentTrail,
+          ]
+        } else {
+          nextTrailHistory = [...nextTrailHistory, currentTrail]
+        }
+      } else if (currentTrail) {
+        currentTrail = {
+          ...currentTrail,
+          segments: [...currentTrail.segments],
+          updatedAt: timestamp,
+        }
+        nextTrailHistory = [
+          ...nextTrailHistory.slice(0, -1),
+          currentTrail,
+        ]
+      }
+
+      const hasMoved =
+        base.position.x !== position.x || base.position.y !== position.y
+
+      if (hasMoved && currentTrail) {
+        const segment: ShipTrailSegment = {
+          start: { ...base.position },
+          end: { ...position },
+          completedAt: timestamp,
+        }
+
+        const segments = [...currentTrail.segments, segment]
+        currentTrail = {
+          ...currentTrail,
+          segments,
+          updatedAt: timestamp,
+        }
+        nextTrailHistory = [
+          ...nextTrailHistory.slice(0, -1),
+          currentTrail,
+        ]
+      }
+
       /**
        * TODO: Validate movementResolver output before committing updates and
        * trigger animations once the rendering pipeline is ready.
@@ -93,6 +179,8 @@ export const useShipStore = create<ShipStore>((set) => ({
         localFrameOrigin: nextFrameOrigin,
         accumulatedDistance: nextAccumulatedDistance,
         motionState: nextMotionState,
+        trailHistory: nextTrailHistory,
+        territoryPolygons: base.territoryPolygons ?? [],
       }
       const ships = {
         ...state.ships,
