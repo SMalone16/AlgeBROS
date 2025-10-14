@@ -21,9 +21,27 @@ describe('initializeBoard', () => {
     const { initializeBoard } = await import('../game')
 
     const board = initializeBoard()
-    const originCell = board[0][0]
-    const innerCell = board[1][1]
-    const finalRowCell = board.at(-1)?.[0]
+    const firstRow = board[0]
+    expect(firstRow).toBeDefined()
+    if (!firstRow) {
+      throw new Error('Expected first row to be defined')
+    }
+
+    const secondRow = board[1]
+    expect(secondRow).toBeDefined()
+    if (!secondRow) {
+      throw new Error('Expected second row to be defined')
+    }
+
+    const lastRow = board.at(-1)
+    expect(lastRow).toBeDefined()
+    if (!lastRow) {
+      throw new Error('Expected last row to be defined')
+    }
+
+    const originCell = firstRow[0]!
+    const innerCell = secondRow[1]!
+    const finalRowCell = lastRow[0]!
 
     expect(originCell.id).toBe('r0-c0')
     expect(originCell.isSpawnPoint).toBe(true)
@@ -35,7 +53,7 @@ describe('initializeBoard', () => {
     expect(innerCell.equationSeed).toContain(innerCell.id)
     expect(['easy', 'medium', 'hard']).toContain(innerCell.equationDifficulty)
 
-    expect(finalRowCell?.equationDifficulty).toBe('hard')
+    expect(finalRowCell.equationDifficulty).toBe('hard')
   })
 
   it('derives algebra prompts from the equation generator for each territory', async () => {
@@ -47,7 +65,13 @@ describe('initializeBoard', () => {
     const { initializeBoard } = await import('../game')
 
     const board = initializeBoard()
-    const sampleCell = board[2][3]
+    const thirdRow = board[2]
+    expect(thirdRow).toBeDefined()
+    if (!thirdRow) {
+      throw new Error('Expected third row to be defined')
+    }
+
+    const sampleCell = thirdRow[3]!
 
     expect(mockGenerator).toHaveBeenCalled()
     expect(mockGenerator).toHaveBeenCalledWith(sampleCell.equationSeed)
