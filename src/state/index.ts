@@ -18,6 +18,12 @@ export {
   selectPreviewEnabled,
   selectPendingExpression,
 } from './movementPreviewStore'
+export {
+  useDockMenuStore,
+  selectIsDockMenuOpen,
+  selectDockMenuContext,
+  selectLastDockMenuExit,
+} from './dockMenuStore'
 
 /**
  * TODO: Introduce combined selectors for territory summaries and scoreboard
