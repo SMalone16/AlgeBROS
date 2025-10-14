@@ -41,3 +41,15 @@ export const useTurnTimerStore = create<TurnTimerStore>((set) => ({
 
 export const selectIsTimerExpired = (state: TurnTimerStore): boolean =>
   state.secondsRemaining === 0 && !state.isPaused
+
+export const selectTimerSnapshot = (
+  state: TurnTimerStore,
+): Pick<TurnTimerStore, 'secondsRemaining' | 'isPaused'> => ({
+  secondsRemaining: state.secondsRemaining,
+  isPaused: state.isPaused,
+})
+
+export const selectSecondsRemaining = (state: TurnTimerStore): number =>
+  state.secondsRemaining
+
+export const selectIsTimerPaused = (state: TurnTimerStore): boolean => state.isPaused
