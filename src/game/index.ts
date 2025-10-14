@@ -6,6 +6,8 @@ import type { TurnTimerStore } from '../state/timerStore'
 import { usePlayerStore, type LeaderboardSnapshot } from '../state/playerStore'
 import { detectClosedPolygons, estimateBoundingBoxOverlapArea, polygonsOverlap } from './closureDetection'
 import type { CanonicalPolygon, ShipModel } from '../types'
+import { useDockMenuStore } from '../state/dockMenuStore'
+import type { DockingContact, DockingGeometry } from '../types'
 
 export const BOARD_COLUMNS = 16
 export const BOARD_ROWS = 12
@@ -26,6 +28,304 @@ export type EquationDifficulty = 'easy' | 'medium' | 'hard'
 
 export const THRUST_COEFFICIENT = 8
 
+interface DockDefinition {
+  id: string
+  label: string
+  cells: Array<{ row: number; column: number }>
+  radius?: number
+}
+
+const DOCK_DEFINITIONS: DockDefinition[] = [
+  {
+    id: 'central-research-dock',
+    label: 'Central Research Dock',
+    cells: [
+      { row: 5, column: 7 },
+      { row: 5, column: 8 },
+      { row: 6, column: 7 },
+      { row: 6, column: 8 },
+    ],
+    radius: 1.1,
+  },
+  {
+    id: 'alpha-gate-dock',
+    label: 'Alpha Gate Dock',
+    cells: [
+      { row: 0, column: 0 },
+      { row: 0, column: 1 },
+      { row: 1, column: 0 },
+    ],
+    radius: 0.9,
+  },
+  {
+    id: 'omega-gate-dock',
+    label: 'Omega Gate Dock',
+    cells: [
+      { row: 10, column: 14 },
+      { row: 10, column: 15 },
+      { row: 11, column: 15 },
+    ],
+    radius: 0.9,
+  },
+]
+
+const computeDockGeometry = (definition: DockDefinition): DockingGeometry => {
+  let minRow = Number.POSITIVE_INFINITY
+  let maxRow = Number.NEGATIVE_INFINITY
+  let minColumn = Number.POSITIVE_INFINITY
+  let maxColumn = Number.NEGATIVE_INFINITY
+
+  definition.cells.forEach(({ row, column }) => {
+    minRow = Math.min(minRow, row)
+    maxRow = Math.max(maxRow, row)
+    minColumn = Math.min(minColumn, column)
+    maxColumn = Math.max(maxColumn, column)
+  })
+
+  const width = maxColumn - minColumn + 1
+  const height = maxRow - minRow + 1
+
+  const anchor = {
+    x: minColumn + width / 2,
+    y: minRow + height / 2,
+  }
+
+  const bounds = {
+    minX: minColumn,
+    minY: minRow,
+    maxX: maxColumn + 1,
+    maxY: maxRow + 1,
+  }
+
+  const radius = definition.radius ?? Math.max(width, height) / 2
+
+  return {
+    id: definition.id,
+    label: definition.label,
+    anchor,
+    radius,
+    bounds,
+    cells: definition.cells.map((cell) => ({ ...cell })),
+  }
+}
+
+export const DOCK_GEOMETRIES: DockingGeometry[] = DOCK_DEFINITIONS.map((definition) =>
+  computeDockGeometry(definition),
+)
+
+const DOCK_CELL_LOOKUP = new Map<string, DockingGeometry>()
+DOCK_GEOMETRIES.forEach((geometry) => {
+  geometry.cells.forEach(({ row, column }) => {
+    DOCK_CELL_LOOKUP.set(`${row}-${column}`, geometry)
+  })
+})
+
+const EPSILON = 1e-6
+
+interface Vector2D {
+  x: number
+  y: number
+}
+
+const isPointInRect = (point: Vector2D, bounds: DockingGeometry['bounds']): boolean =>
+  point.x >= bounds.minX - EPSILON &&
+  point.x <= bounds.maxX + EPSILON &&
+  point.y >= bounds.minY - EPSILON &&
+  point.y <= bounds.maxY + EPSILON
+
+const orientation = (p: Vector2D, q: Vector2D, r: Vector2D): number =>
+  (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y)
+
+const onSegment = (p: Vector2D, q: Vector2D, r: Vector2D): boolean =>
+  q.x <= Math.max(p.x, r.x) + EPSILON &&
+  q.x + EPSILON >= Math.min(p.x, r.x) &&
+  q.y <= Math.max(p.y, r.y) + EPSILON &&
+  q.y + EPSILON >= Math.min(p.y, r.y)
+
+const segmentsIntersect = (p1: Vector2D, q1: Vector2D, p2: Vector2D, q2: Vector2D): boolean => {
+  const o1 = orientation(p1, q1, p2)
+  const o2 = orientation(p1, q1, q2)
+  const o3 = orientation(p2, q2, p1)
+  const o4 = orientation(p2, q2, q1)
+
+  if (o1 * o2 < 0 && o3 * o4 < 0) {
+    return true
+  }
+
+  if (Math.abs(o1) <= EPSILON && onSegment(p1, p2, q1)) {
+    return true
+  }
+  if (Math.abs(o2) <= EPSILON && onSegment(p1, q2, q1)) {
+    return true
+  }
+  if (Math.abs(o3) <= EPSILON && onSegment(p2, p1, q2)) {
+    return true
+  }
+  if (Math.abs(o4) <= EPSILON && onSegment(p2, q1, q2)) {
+    return true
+  }
+
+  return false
+}
+
+const segmentIntersectsRect = (
+  start: Vector2D,
+  end: Vector2D,
+  bounds: DockingGeometry['bounds'],
+): boolean => {
+  if (isPointInRect(start, bounds) || isPointInRect(end, bounds)) {
+    return true
+  }
+
+  const topLeft = { x: bounds.minX, y: bounds.minY }
+  const topRight = { x: bounds.maxX, y: bounds.minY }
+  const bottomLeft = { x: bounds.minX, y: bounds.maxY }
+  const bottomRight = { x: bounds.maxX, y: bounds.maxY }
+
+  return (
+    segmentsIntersect(start, end, topLeft, topRight) ||
+    segmentsIntersect(start, end, topRight, bottomRight) ||
+    segmentsIntersect(start, end, bottomRight, bottomLeft) ||
+    segmentsIntersect(start, end, bottomLeft, topLeft)
+  )
+}
+
+const projectPointToSegment = (
+  point: Vector2D,
+  start: Vector2D,
+  end: Vector2D,
+): { nearest: Vector2D; distance: number; t: number } => {
+  const segment = { x: end.x - start.x, y: end.y - start.y }
+  const lengthSquared = segment.x * segment.x + segment.y * segment.y
+
+  if (lengthSquared <= EPSILON) {
+    const distance = Math.hypot(point.x - start.x, point.y - start.y)
+    return { nearest: { ...start }, distance, t: 0 }
+  }
+
+  const tRaw =
+    ((point.x - start.x) * segment.x + (point.y - start.y) * segment.y) / lengthSquared
+  const t = Math.min(1, Math.max(0, tRaw))
+  const nearest = { x: start.x + segment.x * t, y: start.y + segment.y * t }
+  const distance = Math.hypot(point.x - nearest.x, point.y - nearest.y)
+
+  return { nearest, distance, t }
+}
+
+const DOCK_CONTACT_PRIORITY: Record<DockingContact['contactType'], number> = {
+  snap: 0,
+  intersection: 1,
+  proximity: 2,
+}
+
+const selectBetterContact = (
+  next: DockingContact,
+  current: DockingContact | null,
+): DockingContact => {
+  if (!current) {
+    return next
+  }
+
+  const priorityDelta = DOCK_CONTACT_PRIORITY[next.contactType] - DOCK_CONTACT_PRIORITY[current.contactType]
+  if (priorityDelta < 0) {
+    return next
+  }
+  if (priorityDelta > 0) {
+    return current
+  }
+
+  return next.progress < current.progress ? next : current
+}
+
+const evaluateDockingForGeometry = (
+  geometry: DockingGeometry,
+  start: Vector2D,
+  end: Vector2D,
+): DockingContact | null => {
+  let bestContact: DockingContact | null = null
+
+  geometry.cells.forEach(({ row, column }) => {
+    const bounds = {
+      minX: column,
+      maxX: column + 1,
+      minY: row,
+      maxY: row + 1,
+    }
+
+    const center = { x: column + 0.5, y: row + 0.5 }
+
+    if (isPointInRect(end, bounds)) {
+      const { t } = projectPointToSegment(center, start, end)
+      const distance = Math.hypot(center.x - geometry.anchor.x, center.y - geometry.anchor.y)
+      const contact: DockingContact = {
+        dockId: geometry.id,
+        dockLabel: geometry.label,
+        contactType: 'snap',
+        contactPoint: center,
+        distance,
+        progress: t,
+        geometry,
+      }
+      bestContact = selectBetterContact(contact, bestContact)
+      return
+    }
+
+    if (segmentIntersectsRect(start, end, bounds)) {
+      const { t } = projectPointToSegment(center, start, end)
+      const distance = Math.hypot(center.x - geometry.anchor.x, center.y - geometry.anchor.y)
+      const contact: DockingContact = {
+        dockId: geometry.id,
+        dockLabel: geometry.label,
+        contactType: 'intersection',
+        contactPoint: center,
+        distance,
+        progress: t,
+        geometry,
+      }
+      bestContact = selectBetterContact(contact, bestContact)
+    }
+  })
+
+  if (bestContact) {
+    return bestContact
+  }
+
+  const proximity = projectPointToSegment(geometry.anchor, start, end)
+  if (proximity.distance <= geometry.radius) {
+    return {
+      dockId: geometry.id,
+      dockLabel: geometry.label,
+      contactType: 'proximity',
+      contactPoint: proximity.nearest,
+      distance: proximity.distance,
+      progress: proximity.t,
+      geometry,
+    }
+  }
+
+  return null
+}
+
+export const detectDockingContact = (
+  start: Vector2D,
+  end: Vector2D,
+): DockingContact | null => {
+  if (Math.abs(start.x - end.x) <= EPSILON && Math.abs(start.y - end.y) <= EPSILON) {
+    return null
+  }
+
+  let resolved: DockingContact | null = null
+
+  DOCK_GEOMETRIES.forEach((geometry) => {
+    const contact = evaluateDockingForGeometry(geometry, start, end)
+    if (contact) {
+      resolved = selectBetterContact(contact, resolved)
+    }
+  })
+
+  return resolved
+}
+
 export interface BoardStateCell {
   id: string
   row: number
@@ -33,6 +333,9 @@ export interface BoardStateCell {
   terrainType: TerrainType
   isSpawnPoint: boolean
   isObjective: boolean
+  isDockable: boolean
+  dockId: string | null
+  dockGeometry: DockingGeometry | null
   isObstacle: boolean
   occupantId: string | null
   equationSeed: string
@@ -99,6 +402,7 @@ export const initializeBoard = (): BoardState => {
       const terrainType = determineTerrain(row, column, isSpawnPoint, isObjective)
       const equationSeed = `${id}:${terrainType}`
       const equationPrompt = generateEquationForTerritory(equationSeed)
+      const dockGeometry = DOCK_CELL_LOOKUP.get(locationKey) ?? null
 
       boardRow.push({
         id,
@@ -107,6 +411,9 @@ export const initializeBoard = (): BoardState => {
         terrainType,
         isSpawnPoint,
         isObjective,
+        isDockable: Boolean(dockGeometry),
+        dockId: dockGeometry?.id ?? null,
+        dockGeometry,
         isObstacle: terrainType === 'asteroid',
         occupantId: null,
         equationSeed,
@@ -336,6 +643,7 @@ export interface MovementSuccess extends BaseMovementResult {
   durationSeconds: number
   speed: number
   message: string
+  dockingContact: DockingContact | null
 }
 
 export interface MovementFailure extends BaseMovementResult {
@@ -360,7 +668,10 @@ const sanitizeExpression = (expression: string): string => expression.replace(/\
 
 const containsInvalidTokens = (expression: string): boolean => /[^0-9+\-*/^()]/.test(expression)
 
-export const resolveMovementSubmission = (submission: MovementSubmission): MovementResult => {
+export const resolveMovementSubmission = (
+  submission: MovementSubmission,
+  dependencies: MovementResolverDependencies = {},
+): MovementResult => {
   const { difficulty, expression } = submission
   const rules = DIFFICULTY_RULES[difficulty]
 
@@ -560,8 +871,8 @@ export const resolveMovementSubmission = (submission: MovementSubmission): Movem
     evaluated,
     durationSeconds,
     speed: SHIP_TRAVEL_SPEED,
-    message: 'Trajectory scheduled for execution.',
     message: 'Trajectory resolved.',
+    dockingContact: null,
   }
 }
 
@@ -569,10 +880,20 @@ export const movementResolver = (
   submission: MovementSubmission,
   dependencies: MovementResolverDependencies = {},
 ): MovementResult => {
-  const result = resolveMovementSubmission(submission)
+  const result = resolveMovementSubmission(submission, dependencies)
 
   if (!result.success) {
     return result
+  }
+
+  const contact = detectDockingContact(result.origin, result.destination)
+  if (contact) {
+    const { openDockMenu } = useDockMenuStore.getState()
+    openDockMenu({
+      shipId: result.shipId,
+      ownerId: result.ownerId,
+      contact,
+    })
   }
 
   const updateShipPosition =
@@ -583,5 +904,6 @@ export const movementResolver = (
   return {
     ...result,
     message: 'Trajectory resolved and ship position updated.',
+    dockingContact: contact ?? result.dockingContact,
   }
 }

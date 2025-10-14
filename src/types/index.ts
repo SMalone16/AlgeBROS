@@ -54,6 +54,27 @@ export interface ShipModel {
   /** TODO: Extend with velocity, health, cargo, and algebraic cooldown stats. */
 }
 
+export type DockingContactType = 'snap' | 'intersection' | 'proximity'
+
+export interface DockingGeometry {
+  id: string
+  label: string
+  anchor: { x: number; y: number }
+  radius: number
+  bounds: { minX: number; minY: number; maxX: number; maxY: number }
+  cells: Array<{ row: number; column: number }>
+}
+
+export interface DockingContact {
+  dockId: DockingGeometry['id']
+  dockLabel: DockingGeometry['label']
+  contactType: DockingContactType
+  contactPoint: { x: number; y: number }
+  distance: number
+  progress: number
+  geometry: DockingGeometry
+}
+
 export interface TurnTimerSnapshot {
   secondsRemaining: number
   isPaused: boolean

@@ -33,8 +33,9 @@ describe('Game Rules', () => {
     expect(result.evaluated).toBe(3)
     expect(result.durationSeconds).toBeCloseTo(6)
     expect(result.speed).toBe(4)
+    expect(result.dockingContact).toBeNull()
 
-    expect(updateShipPosition).toHaveBeenCalledTimes(1)
+    expect(updateShipPosition).toHaveBeenCalledTimes(2)
     const [shipId, persistedPosition, options] = updateShipPosition.mock.calls[0]
     expect(shipId).toBe('scout-7')
     expect(persistedPosition).toEqual({ x: 3, y: 4 })
@@ -53,6 +54,10 @@ describe('Game Rules', () => {
     })
     expect(typeof options?.motionState?.startedAt).toBe('number')
     expect(typeof options?.motionState?.eta).toBe('number')
+
+    const [secondShipId, finalPosition] = updateShipPosition.mock.calls[1]
+    expect(secondShipId).toBe('scout-7')
+    expect(finalPosition).toEqual({ x: 27, y: 4 })
 
     expect(useTurnTimerStore.getState().movesRemaining).toBe(2)
   })
