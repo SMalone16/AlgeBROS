@@ -77,4 +77,27 @@ describe('initializeBoard', () => {
     expect(mockGenerator).toHaveBeenCalledWith(sampleCell.equationSeed)
     expect(sampleCell.equationPrompt).toBe(`Equation for ${sampleCell.equationSeed}`)
   })
+
+  it('marks dockable cells with geometry metadata', async () => {
+    const { initializeBoard, DOCK_GEOMETRIES } = await import('../game')
+
+    const board = initializeBoard()
+    const primaryDock = DOCK_GEOMETRIES[0]
+
+    expect(primaryDock).toBeDefined()
+    if (!primaryDock) {
+      throw new Error('Expected at least one dock geometry definition')
+    }
+
+    primaryDock.cells.forEach(({ row, column }) => {
+      const cell = board[row]?.[column]
+      expect(cell).toBeDefined()
+      if (!cell) {
+        throw new Error(`Missing dock cell at ${row},${column}`)
+      }
+      expect(cell.isDockable).toBe(true)
+      expect(cell.dockId).toBe(primaryDock.id)
+      expect(cell.dockGeometry).toBe(primaryDock)
+    })
+  })
 })
