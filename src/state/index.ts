@@ -12,6 +12,12 @@ export {
   selectSecondsRemaining,
   selectIsTimerPaused,
 } from './timerStore'
+export {
+  useMovementPreviewStore,
+  selectPreviewResult,
+  selectPreviewEnabled,
+  selectPendingExpression,
+} from './movementPreviewStore'
 
 /**
  * TODO: Introduce combined selectors for territory summaries and scoreboard
