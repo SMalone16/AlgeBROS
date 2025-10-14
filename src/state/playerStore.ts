@@ -1,15 +1,27 @@
 import { create } from 'zustand'
 import type { PlayerProfile } from '../types'
 
+export interface ContestedRegionSnapshot {
+  owners: string[]
+  cells: Array<{ row: number; column: number }>
+  cellCount: number
+}
+
+export interface LeaderboardSnapshot {
+  scores: Record<string, number>
+  contestedRegions: ContestedRegionSnapshot[]
+  resolvedAt: number
+}
+
 export interface PlayerStore {
   players: PlayerProfile[]
   activePlayerId: string | null
   /** TODO: Cache leaderboard metadata once scoring is implemented. */
-  leaderboardSnapshot: Record<string, number> | null
+  leaderboardSnapshot: LeaderboardSnapshot | null
   setPlayers: (players: PlayerProfile[]) => void
   setActivePlayer: (playerId: string | null) => void
   /** TODO: Track alliance-wide bonuses to support team scoreboards. */
-  setLeaderboardSnapshot: (scores: Record<string, number> | null) => void
+  setLeaderboardSnapshot: (snapshot: LeaderboardSnapshot | null) => void
 }
 
 export const usePlayerStore = create<PlayerStore>((set) => ({
@@ -18,7 +30,7 @@ export const usePlayerStore = create<PlayerStore>((set) => ({
   leaderboardSnapshot: null,
   setPlayers: (players) => set({ players }),
   setActivePlayer: (playerId) => set({ activePlayerId: playerId }),
-  setLeaderboardSnapshot: (scores) => set({ leaderboardSnapshot: scores }),
+  setLeaderboardSnapshot: (snapshot) => set({ leaderboardSnapshot: snapshot }),
 }))
 
 export const selectActivePlayer = (state: PlayerStore): PlayerProfile | null => {
