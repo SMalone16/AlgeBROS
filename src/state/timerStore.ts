@@ -7,17 +7,35 @@ export interface TurnTimerStore extends TurnTimerSnapshot {
   pause: () => void
   resume: () => void
   reset: () => void
+  startNextTurn: (durationSeconds?: number) => void
+  canScheduleMove: () => boolean
+  consumeMove: () => boolean
+  resetMoveBudget: () => void
 }
 
-const initialState: TurnTimerSnapshot = {
+export const TURN_MOVE_CAP = 3
+
+export const createInitialTurnTimerSnapshot = (): TurnTimerSnapshot => ({
   secondsRemaining: 0,
   isPaused: true,
-}
+  turnId: 0,
+  movesRemaining: TURN_MOVE_CAP,
+  maxMovesPerTurn: TURN_MOVE_CAP,
+  turnStartedAt: null,
+})
 
-export const useTurnTimerStore = create<TurnTimerStore>((set) => ({
+const initialState = createInitialTurnTimerSnapshot()
+
+export const useTurnTimerStore = create<TurnTimerStore>((set, get) => ({
   ...initialState,
   startTimer: (durationSeconds) =>
-    set({ secondsRemaining: durationSeconds, isPaused: false }),
+    set((state) => ({
+      secondsRemaining: durationSeconds,
+      isPaused: false,
+      turnId: state.turnId + 1,
+      movesRemaining: state.maxMovesPerTurn,
+      turnStartedAt: Date.now(),
+    })),
   tick: () =>
     set((state) => {
       if (state.isPaused || state.secondsRemaining <= 0) {
@@ -25,9 +43,19 @@ export const useTurnTimerStore = create<TurnTimerStore>((set) => ({
       }
 
       /** TODO: Emit events for overtime/turn transitions once networking lands. */
+      const secondsRemaining = Math.max(0, state.secondsRemaining - 1)
+      if (secondsRemaining === 0) {
+        return {
+          ...state,
+          secondsRemaining,
+          turnId: state.turnId + 1,
+          movesRemaining: state.maxMovesPerTurn,
+          turnStartedAt: Date.now(),
+        }
+      }
       return {
         ...state,
-        secondsRemaining: Math.max(0, state.secondsRemaining - 1),
+        secondsRemaining,
       }
     }),
   pause: () => set((state) => ({ ...state, isPaused: true })),
@@ -36,7 +64,30 @@ export const useTurnTimerStore = create<TurnTimerStore>((set) => ({
       ...state,
       isPaused: false,
     })),
-  reset: () => set(initialState),
+  reset: () => set(createInitialTurnTimerSnapshot()),
+  startNextTurn: (durationSeconds) =>
+    set((state) => ({
+      ...state,
+      secondsRemaining: durationSeconds ?? state.secondsRemaining,
+      turnId: state.turnId + 1,
+      movesRemaining: state.maxMovesPerTurn,
+      isPaused: false,
+      turnStartedAt: Date.now(),
+    })),
+  canScheduleMove: () => get().movesRemaining > 0,
+  consumeMove: () => {
+    const state = get()
+    if (state.movesRemaining <= 0) {
+      return false
+    }
+    set({ movesRemaining: state.movesRemaining - 1 })
+    return true
+  },
+  resetMoveBudget: () =>
+    set((state) => ({
+      ...state,
+      movesRemaining: state.maxMovesPerTurn,
+    })),
 }))
 
 export const selectIsTimerExpired = (state: TurnTimerStore): boolean =>
@@ -53,3 +104,5 @@ export const selectSecondsRemaining = (state: TurnTimerStore): number =>
   state.secondsRemaining
 
 export const selectIsTimerPaused = (state: TurnTimerStore): boolean => state.isPaused
+
+export const selectMovesRemaining = (state: TurnTimerStore): number => state.movesRemaining

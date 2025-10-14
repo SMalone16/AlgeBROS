@@ -1,10 +1,17 @@
 import { evaluateExpression, generateEquationForTerritory } from '../math'
 import { useShipStore } from '../state/shipStore'
 import type { ShipStore } from '../state/shipStore'
+import { useTurnTimerStore } from '../state/timerStore'
+import type { TurnTimerStore } from '../state/timerStore'
 import { usePlayerStore, type LeaderboardSnapshot } from '../state/playerStore'
 
 export const BOARD_COLUMNS = 16
 export const BOARD_ROWS = 12
+
+export const ARENA_WIDTH = 64
+export const ARENA_HEIGHT = 64
+const DISTANCE_COEFFICIENT = 8
+const SHIP_TRAVEL_SPEED = 4
 
 export type TerrainType =
   | 'open'
@@ -312,6 +319,9 @@ export interface MovementSubmission {
 
 export interface MovementResolverDependencies {
   updateShipPosition?: ShipStore['updateShipPosition']
+  timerStore?: Pick<TurnTimerStore, 'canScheduleMove' | 'consumeMove'>
+  shipState?: Pick<ShipStore, 'ships'>
+  now?: () => number
 }
 
 interface BaseMovementResult {
@@ -326,6 +336,8 @@ export interface MovementSuccess extends BaseMovementResult {
   destination: MovementSubmission['origin']
   delta: { x: number; y: number }
   evaluated: number
+  durationSeconds: number
+  speed: number
   message: string
 }
 
@@ -341,6 +353,7 @@ export interface MovementFailure extends BaseMovementResult {
     | 'NON_INTEGER_RESULT'
     | 'THRUST_LIMIT_EXCEEDED'
     | 'OUT_OF_BOUNDS'
+    | 'MOVE_BUDGET_EXHAUSTED'
   message: string
 }
 
@@ -450,35 +463,107 @@ export const resolveMovementSubmission = (submission: MovementSubmission): Movem
     }
   }
 
-  const destinationX = submission.origin.x + evaluated
-  const destinationY = submission.origin.y
+  const turnTimer =
+    dependencies.timerStore ?? useTurnTimerStore.getState()
 
-  if (
-    destinationX < 0 ||
-    destinationX >= BOARD_COLUMNS ||
-    destinationY < 0 ||
-    destinationY >= BOARD_ROWS
-  ) {
+  if (!turnTimer.canScheduleMove()) {
     return {
       success: false,
       shipId: submission.shipId,
       ownerId: submission.ownerId,
       difficulty,
-      errorCode: 'OUT_OF_BOUNDS',
-      message: 'Computed trajectory exits the tactical grid.',
+      errorCode: 'MOVE_BUDGET_EXHAUSTED',
+      message: 'Turn move budget exhausted. Await the next initiative window.',
     }
   }
 
-  const destination = { x: destinationX, y: destinationY }
+  if (!turnTimer.consumeMove()) {
+    return {
+      success: false,
+      shipId: submission.shipId,
+      ownerId: submission.ownerId,
+      difficulty,
+      errorCode: 'MOVE_BUDGET_EXHAUSTED',
+      message: 'Turn move budget exhausted. Await the next initiative window.',
+    }
+  }
+
+  const shipState = dependencies.shipState ?? useShipStore.getState()
+  const existing = shipState.ships[submission.shipId]
+  const currentPosition = existing?.position ?? submission.origin
+  const frameOrigin =
+    existing && existing.motionState.status === 'inFlight'
+      ? existing.localFrameOrigin
+      : { ...currentPosition }
+
+  const scaledDelta = evaluated * DISTANCE_COEFFICIENT
+  const proposedDestination = {
+    x: frameOrigin.x + scaledDelta,
+    y: frameOrigin.y,
+  }
+
+  const clamp = (value: number, max: number): number =>
+    Math.min(Math.max(value, 0), max - 1)
+
+  const destination = {
+    x: clamp(proposedDestination.x, ARENA_WIDTH),
+    y: clamp(proposedDestination.y, ARENA_HEIGHT),
+  }
+
+  const delta = {
+    x: destination.x - currentPosition.x,
+    y: destination.y - currentPosition.y,
+  }
+
+  const distanceMagnitude = Math.hypot(delta.x, delta.y)
+  const now = dependencies.now?.() ?? Date.now()
+  const durationSeconds = distanceMagnitude / SHIP_TRAVEL_SPEED
+
+  const motionState = distanceMagnitude
+    ? {
+        status: 'inFlight' as const,
+        destination,
+        speed: SHIP_TRAVEL_SPEED,
+        startedAt: now,
+        eta: now + durationSeconds * 1000,
+        distanceRemaining: distanceMagnitude,
+        totalDistance: distanceMagnitude,
+      }
+    : {
+        status: 'idle' as const,
+        destination: null,
+        speed: 0,
+        startedAt: null,
+        eta: null,
+        distanceRemaining: 0,
+        totalDistance: 0,
+      }
+
+  const updateShipPosition =
+    dependencies.updateShipPosition ?? useShipStore.getState().updateShipPosition
+
+  const persistedPosition = existing?.position ?? submission.origin
+
+  updateShipPosition(submission.shipId, persistedPosition, {
+    ownerId: submission.ownerId,
+    frameOrigin,
+    distanceDelta: distanceMagnitude,
+    motionState,
+    resetFrame: motionState.status === 'idle',
+  })
+
   return {
     success: true,
     shipId: submission.shipId,
     ownerId: submission.ownerId,
     difficulty,
-    origin: submission.origin,
+    origin: currentPosition,
     destination,
-    delta: { x: evaluated, y: 0 },
+    delta,
     evaluated,
+    durationSeconds,
+    speed: SHIP_TRAVEL_SPEED,
+    message: 'Trajectory scheduled for execution.',
     message: 'Trajectory resolved.',
   }
 }
