@@ -1,4 +1,6 @@
-import { generateEquationForTerritory } from '../math'
+import { evaluateExpression, generateEquationForTerritory } from '../math'
+import { useShipStore } from '../state/shipStore'
+import type { ShipStore } from '../state/shipStore'
 
 export const BOARD_COLUMNS = 16
 export const BOARD_ROWS = 12
@@ -115,10 +117,202 @@ export const territoryManager = (): void => {
   throw new Error('territoryManager is not implemented yet.')
 }
 
-export const movementResolver = (): void => {
-  /**
-   * TODO: Validate algebraic move submissions, compute resulting ship paths,
-   * and hand off successful results to the ship store/state synchronizer.
-   */
-  throw new Error('movementResolver is not implemented yet.')
+const OPERATOR_PATTERN = /[+\-*/^]/g
+
+const DIFFICULTY_RULES: Record<
+  EquationDifficulty,
+  { allowedOperators: Set<string>; maxThrust: number }
+> = {
+  easy: { allowedOperators: new Set(['+', '-']), maxThrust: 5 },
+  medium: { allowedOperators: new Set(['+', '-', '*']), maxThrust: 10 },
+  hard: { allowedOperators: new Set(['+', '-', '*', '/', '^']), maxThrust: 16 },
+}
+
+export interface MovementSubmission {
+  shipId: string
+  ownerId: string
+  origin: { x: number; y: number }
+  expression: string
+  difficulty: EquationDifficulty
+}
+
+export interface MovementResolverDependencies {
+  updateShipPosition?: ShipStore['updateShipPosition']
+}
+
+interface BaseMovementResult {
+  shipId: string
+  ownerId: string
+  difficulty: EquationDifficulty
+}
+
+export interface MovementSuccess extends BaseMovementResult {
+  success: true
+  origin: MovementSubmission['origin']
+  destination: MovementSubmission['origin']
+  delta: { x: number; y: number }
+  evaluated: number
+  message: string
+}
+
+export interface MovementFailure extends BaseMovementResult {
+  success: false
+  errorCode:
+    | 'UNKNOWN_DIFFICULTY'
+    | 'INVALID_TOKEN'
+    | 'OPERATOR_NOT_ALLOWED'
+    | 'EMPTY_EXPRESSION'
+    | 'EVALUATION_ERROR'
+    | 'NON_NUMERIC_RESULT'
+    | 'NON_INTEGER_RESULT'
+    | 'THRUST_LIMIT_EXCEEDED'
+    | 'OUT_OF_BOUNDS'
+  message: string
+}
+
+export type MovementResult = MovementSuccess | MovementFailure
+
+const sanitizeExpression = (expression: string): string => expression.replace(/\s+/g, '')
+
+const containsInvalidTokens = (expression: string): boolean => /[^0-9+\-*/^()]/.test(expression)
+
+export const movementResolver = (
+  submission: MovementSubmission,
+  dependencies: MovementResolverDependencies = {},
+): MovementResult => {
+  const { difficulty, expression } = submission
+  const rules = DIFFICULTY_RULES[difficulty]
+
+  if (!rules) {
+    return {
+      success: false,
+      shipId: submission.shipId,
+      ownerId: submission.ownerId,
+      difficulty,
+      errorCode: 'UNKNOWN_DIFFICULTY',
+      message: `Difficulty tier "${difficulty}" is not recognized.`,
+    }
+  }
+
+  const trimmedExpression = sanitizeExpression(expression)
+  if (!trimmedExpression) {
+    return {
+      success: false,
+      shipId: submission.shipId,
+      ownerId: submission.ownerId,
+      difficulty,
+      errorCode: 'EMPTY_EXPRESSION',
+      message: 'An algebraic expression is required to resolve movement.',
+    }
+  }
+
+  if (containsInvalidTokens(trimmedExpression)) {
+    return {
+      success: false,
+      shipId: submission.shipId,
+      ownerId: submission.ownerId,
+      difficulty,
+      errorCode: 'INVALID_TOKEN',
+      message: 'Expression contains unsupported characters.',
+    }
+  }
+
+  const operators = trimmedExpression.match(OPERATOR_PATTERN) ?? []
+  const disallowedOperator = operators.find((operator) => !rules.allowedOperators.has(operator))
+
+  if (disallowedOperator) {
+    return {
+      success: false,
+      shipId: submission.shipId,
+      ownerId: submission.ownerId,
+      difficulty,
+      errorCode: 'OPERATOR_NOT_ALLOWED',
+      message: `Operator "${disallowedOperator}" is not permitted at the ${difficulty} tier.`,
+    }
+  }
+
+  let evaluated: number
+  try {
+    evaluated = evaluateExpression(expression)
+  } catch (error) {
+    return {
+      success: false,
+      shipId: submission.shipId,
+      ownerId: submission.ownerId,
+      difficulty,
+      errorCode: 'EVALUATION_ERROR',
+      message: error instanceof Error ? error.message : 'Unable to evaluate expression.',
+    }
+  }
+
+  if (!Number.isFinite(evaluated)) {
+    return {
+      success: false,
+      shipId: submission.shipId,
+      ownerId: submission.ownerId,
+      difficulty,
+      errorCode: 'NON_NUMERIC_RESULT',
+      message: 'Expression must resolve to a finite numeric value.',
+    }
+  }
+
+  if (!Number.isInteger(evaluated)) {
+    return {
+      success: false,
+      shipId: submission.shipId,
+      ownerId: submission.ownerId,
+      difficulty,
+      errorCode: 'NON_INTEGER_RESULT',
+      message: 'Fractional thrust values are not supported for ship movement.',
+    }
+  }
+
+  const thrust = Math.abs(evaluated)
+  if (thrust > rules.maxThrust) {
+    return {
+      success: false,
+      shipId: submission.shipId,
+      ownerId: submission.ownerId,
+      difficulty,
+      errorCode: 'THRUST_LIMIT_EXCEEDED',
+      message: `Result exceeds the ${difficulty} thrust limit of ${rules.maxThrust}.`,
+    }
+  }
+
+  const destinationX = submission.origin.x + evaluated
+  const destinationY = submission.origin.y
+
+  if (
+    destinationX < 0 ||
+    destinationX >= BOARD_COLUMNS ||
+    destinationY < 0 ||
+    destinationY >= BOARD_ROWS
+  ) {
+    return {
+      success: false,
+      shipId: submission.shipId,
+      ownerId: submission.ownerId,
+      difficulty,
+      errorCode: 'OUT_OF_BOUNDS',
+      message: 'Computed trajectory exits the tactical grid.',
+    }
+  }
+
+  const updateShipPosition =
+    dependencies.updateShipPosition ?? useShipStore.getState().updateShipPosition
+
+  const destination = { x: destinationX, y: destinationY }
+  updateShipPosition(submission.shipId, destination)
+
+  return {
+    success: true,
+    shipId: submission.shipId,
+    ownerId: submission.ownerId,
+    difficulty,
+    origin: submission.origin,
+    destination,
+    delta: { x: evaluated, y: 0 },
+    evaluated,
+    message: 'Trajectory resolved and ship position updated.',
+  }
 }
