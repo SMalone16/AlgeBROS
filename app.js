@@ -35,7 +35,7 @@ function createPipedSource(origin) {
     requestUrl() {
       const url = new URL("/api/v1/search", origin);
       url.searchParams.set("q", "*");
-      url.searchParams.set("filter", "stream");
+      url.searchParams.set("filter", "videos");
       url.searchParams.set("sort", "upload_date");
       url.searchParams.set("region", "US");
       url.searchParams.set("maxCount", String(MAX_RESULTS));
