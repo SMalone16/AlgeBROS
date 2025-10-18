@@ -1,13 +1,50 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>algebros</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AlgeBROS · True New YouTube Feed</title>
+    <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <main class="app">
+      <header class="header">
+        <div class="branding">
+          <h1>AlgeBROS</h1>
+          <p class="tagline">Live feed of freshly uploaded YouTube videos</p>
+        </div>
+        <div class="controls">
+          <button id="refreshButton" type="button">Refresh now</button>
+          <span id="lastUpdated" class="timestamp" aria-live="polite"></span>
+        </div>
+      </header>
+
+      <section class="status" aria-live="polite">
+        <p id="statusMessage" class="status__message" hidden></p>
+      </section>
+
+      <section class="feed" aria-live="polite">
+        <ol id="videoFeed" class="feed__list" aria-label="Newest YouTube uploads"></ol>
+      </section>
+    </main>
+
+    <template id="videoTemplate">
+      <li class="feed__item">
+        <article class="video">
+          <a class="video__thumbnail" href="" target="_blank" rel="noopener" aria-hidden="true" tabindex="-1">
+            <img loading="lazy" alt="Video thumbnail" src="" />
+          </a>
+          <div class="video__content">
+            <h2 class="video__title"><a href="" target="_blank" rel="noopener"></a></h2>
+            <p class="video__meta">
+              <span class="video__channel"></span>
+              <span class="video__published"></span>
+            </p>
+          </div>
+        </article>
+      </li>
+    </template>
+
+    <script type="module" src="app.js"></script>
   </body>
 </html>
